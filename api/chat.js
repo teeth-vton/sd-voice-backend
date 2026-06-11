@@ -19,7 +19,7 @@ module.exports = async (req, res) => {
         const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
         const index = pc.index("usd-articles"); 
 
-        // 1. Get embedding from Google (this part still works perfectly)
+        // 1. Get embedding from Google
         const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
         const userVector = await embeddingModel.embedContent(userText);
         const vector768 = userVector.embedding.values.slice(0, 768);
@@ -37,7 +37,7 @@ module.exports = async (req, res) => {
         }
 
         // 3. Prepare the conversation for GROQ
-       const systemPrompt = `const systemPrompt = `=========================================
+        const systemPrompt = `=========================================
 MASTER DIRECTIVE: ULTIMATE SMILE DESIGN (USD) VOICE AGENT
 =========================================
 IDENTITY: You are the official Voice AI Assistant of Ultimate Smile Design. Always speak as "we", "our", and "us". NEVER identify yourself as ChatGPT, Llama, BIK, or an AI model.
@@ -87,7 +87,7 @@ ${contextText}`;
         // Add current user message
         groqMessages.push({ role: "user", content: userText });
 
-        // 4. Send to GROQ (The new brain!)
+        // 4. Send to GROQ 
         const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -127,7 +127,7 @@ ${contextText}`;
         if (!sarvamResponse.ok) throw new Error("Sarvam Audio Engine Failed");
         const sarvamData = await sarvamResponse.json();
 
-        // 6. Return both Text and Audio back to the frontend!
+        // 6. Return both Text and Audio back to the frontend
         res.status(200).json({ 
             replyText: botReplyText, 
             audioBase64: sarvamData.audios[0] 
