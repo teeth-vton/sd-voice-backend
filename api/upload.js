@@ -45,7 +45,7 @@ module.exports = async (req, res) => {
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
         const index = pc.index("usd-articles"); 
-       const embeddingModel = genAI.getGenerativeModel({ model: "embedding-001" });
+  const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
         let uploadedCount = 0;
 
         for (const article of myArticles) {
