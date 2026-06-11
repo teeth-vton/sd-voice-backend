@@ -45,7 +45,10 @@ module.exports = async (req, res) => {
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
         const index = pc.index("usd-articles"); 
-  const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
+        
+        // 1. Use the live 2026 model
+        const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
+
         let uploadedCount = 0;
 
         for (const article of myArticles) {
@@ -55,10 +58,13 @@ module.exports = async (req, res) => {
             // Convert text to AI Vectors
             const result = await embeddingModel.embedContent(article.text);
             
+            // THE MAGIC TRICK: Slice 3072 dimensions down to 768 to fit Pinecone!
+            const vector768 = result.embedding.values.slice(0, 768);
+            
             // Upload to Pinecone database
             await index.upsert([{
                 id: article.id.toString(),
-                values: result.embedding.values,
+                values: vector768,
                 metadata: {
                     title: article.title || "Blog Post",
                     content: article.text
