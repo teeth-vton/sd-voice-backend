@@ -8,7 +8,6 @@ module.exports = async (req, res) => {
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS, POST');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
-    // Handle the preflight request instantly so the browser lets it through
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
@@ -16,18 +15,20 @@ module.exports = async (req, res) => {
     try {
         const { userText, history } = req.body;
 
-        // Connect securely using hidden environment variables
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
         const index = pc.index("usd-articles"); 
 
-        // 1. Convert user's words into AI Vectors
-const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
+        // 1. Use the live 2026 model
+        const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
         const userVector = await embeddingModel.embedContent(userText);
+
+        // THE MAGIC TRICK: Slice 3072 dimensions down to 768 to fit Pinecone!
+        const vector768 = userVector.embedding.values.slice(0, 768);
 
         // 2. Search Pinecone for the 2 most relevant articles
         const searchResults = await index.query({
-            vector: userVector.embedding.values,
+            vector: vector768,
             topK: 2,
             includeMetadata: true
         });
