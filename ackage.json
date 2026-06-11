@@ -1,0 +1,8 @@
+{
+  "name": "usd-backend",
+  "version": "1.0.0",
+  "dependencies": {
+    "@google/generative-ai": "^0.1.1",
+    "@pinecone-database/pinecone": "^2.2.0"
+  }
+}
