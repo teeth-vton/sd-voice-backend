@@ -22,7 +22,7 @@ module.exports = async (req, res) => {
         const index = pc.index("usd-articles"); 
 
         // 1. Convert user's words into AI Vectors
-const embeddingModel = genAI.getGenerativeModel({ model: "embedding-001" });
+const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
         const userVector = await embeddingModel.embedContent(userText);
 
         // 2. Search Pinecone for the 2 most relevant articles
