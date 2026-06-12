@@ -75,7 +75,7 @@ ${contextText}`;
         }
         if (userText) groqMessages.push({ role: "user", content: userText });
 
-        // SWAPPED MODEL TO A HIGH-CAPACITY FALLBACK
+        // SWAPPED MODEL TO THE NEWEST, ACTIVE 70B MODEL
         const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -83,7 +83,7 @@ ${contextText}`;
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                model: "llama3-8b-8192", 
+                model: "llama-3.3-70b-versatile", 
                 messages: groqMessages,
                 max_tokens: 150
             })
