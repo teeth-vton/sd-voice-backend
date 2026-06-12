@@ -110,8 +110,10 @@ ${contextText}`;
             body: JSON.stringify({
                 inputs: [cleanSpokenText],
                 target_language_code: "hi-IN",
-                speaker: "meera", 
-                model: "bulbul:v3"
+                speaker: "shreya", // Switched to valid speaker
+                model: "bulbul:v3",
+                speech_sample_rate: 8000, // Telephony 8kHz
+                pace: 1.1 // 1.1x Speed
             })
         });
 
