@@ -12,8 +12,36 @@ module.exports = async (req, res) => {
     }
 
     try {
-        const { userText, history } = req.body;
+        const { userText, history, type, text } = req.body;
 
+        // NEW: TTS-ONLY ROUTE FOR INITIAL GREETING (Bypasses Groq)
+        if (type === 'tts') {
+            const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
+                method: 'POST',
+                headers: {
+                    'api-subscription-key': process.env.SARVAM_API_KEY,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    inputs: [text],
+                    target_language_code: "hi-IN",
+                    speaker: "shreya",
+                    model: "bulbul:v3",
+                    speech_sample_rate: 8000,
+                    pace: 1.1
+                })
+            });
+
+            if (!sarvamResponse.ok) {
+                const sarvamErr = await sarvamResponse.text();
+                throw new Error(`Sarvam Audio Engine Failed: ${sarvamErr}`);
+            }
+            
+            const sarvamData = await sarvamResponse.json();
+            return res.status(200).json({ audioBase64: sarvamData.audios[0] });
+        }
+
+        // STANDARD CHAT ROUTE
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
         const index = pc.index("usd-articles"); 
@@ -57,7 +85,7 @@ FORBIDDEN: Politics, coding, math, celebrities, jokes, general knowledge. Gossip
 REFUSAL: For ANY forbidden or mixed topic, reply EXACTLY: "I am specifically designed to assist only with dental and Ultimate Smile Design–related queries."
 
 INTENT ROUTING & END OF CONVERSATION PLAYBOOK:
-- END OF CHAT: If the user says goodbye, bye, or says thanks to end the chat, reply EXACTLY with: "Thanks for talking with Ultimate Smile Design AI assistant. Feel free to reach out to us at our contact page. [END_CHAT]" (Translate the spoken text to their language, but ALWAYS append the exact English tag [END_CHAT] at the end).
+- END OF CHAT: If the user says words like "bye", "tata", "goodbye", "chalta hu", "chalti hu", "thanks", "shukriya", or clearly wants to end the chat, reply EXACTLY with: "Thanks for talking with Ultimate Smile Design AI assistant. Feel free to reach out to us at our contact page. [END_CHAT]" (Translate the spoken text to their language, but ALWAYS append the exact English tag [END_CHAT] at the end).
 - SMILE DESIGN: "Our certified designers at Ultimate Smile Design can help you achieve a natural smile. Please visit our Virtual Smile Try-On."
 - DENTIST SEARCH: "Check the Certified Dentists page on the Ultimate Smile Design website."
 - CONTACT: "Ultimate Smile Design is headquartered in Surat. Please visit our Contact page."
@@ -75,7 +103,6 @@ ${contextText}`;
         }
         if (userText) groqMessages.push({ role: "user", content: userText });
 
-        // SWAPPED MODEL TO THE NEWEST, ACTIVE 70B MODEL
         const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -89,7 +116,6 @@ ${contextText}`;
             })
         });
 
-        // DETAILED ERROR LOGGING
         if (!groqResponse.ok) {
             const errText = await groqResponse.text();
             console.error("Groq Raw Error:", errText);
@@ -110,14 +136,13 @@ ${contextText}`;
             body: JSON.stringify({
                 inputs: [cleanSpokenText],
                 target_language_code: "hi-IN",
-                speaker: "shreya", // Switched to valid speaker
+                speaker: "shreya", 
                 model: "bulbul:v3",
-                speech_sample_rate: 8000, // Telephony 8kHz
-                pace: 1.1 // 1.1x Speed
+                speech_sample_rate: 8000, 
+                pace: 1.1 
             })
         });
 
-        // DETAILED AUDIO ERROR LOGGING
         if (!sarvamResponse.ok) {
             const sarvamErr = await sarvamResponse.text();
             throw new Error(`Sarvam Audio Engine Failed: ${sarvamErr}`);
