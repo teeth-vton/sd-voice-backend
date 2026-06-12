@@ -70,11 +70,12 @@ ${contextText}`;
             history.forEach(h => {
                 const role = h.role === 'model' ? 'assistant' : 'user';
                 const content = h.parts[0].text;
-                groqMessages.push({ role, content });
+                if (content) groqMessages.push({ role, content });
             });
         }
-        groqMessages.push({ role: "user", content: userText });
+        if (userText) groqMessages.push({ role: "user", content: userText });
 
+        // SWAPPED MODEL TO A HIGH-CAPACITY FALLBACK
         const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -82,17 +83,22 @@ ${contextText}`;
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                model: "llama-3.1-8b-instant",
+                model: "llama3-8b-8192", 
                 messages: groqMessages,
                 max_tokens: 150
             })
         });
 
-        if (!groqResponse.ok) throw new Error(`Groq API Error`);
+        // DETAILED ERROR LOGGING
+        if (!groqResponse.ok) {
+            const errText = await groqResponse.text();
+            console.error("Groq Raw Error:", errText);
+            throw new Error(`Groq API Error: ${errText}`);
+        }
+
         const groqData = await groqResponse.json();
         const botReplyText = groqData.choices[0].message.content;
 
-        // FIXED: Using "meera" instead of "priya"
         const cleanSpokenText = botReplyText.replace('[END_CHAT]', '').trim();
 
         const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
@@ -109,7 +115,12 @@ ${contextText}`;
             })
         });
 
-        if (!sarvamResponse.ok) throw new Error("Sarvam Audio Engine Failed");
+        // DETAILED AUDIO ERROR LOGGING
+        if (!sarvamResponse.ok) {
+            const sarvamErr = await sarvamResponse.text();
+            throw new Error(`Sarvam Audio Engine Failed: ${sarvamErr}`);
+        }
+        
         const sarvamData = await sarvamResponse.json();
 
         res.status(200).json({ 
