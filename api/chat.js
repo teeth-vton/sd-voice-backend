@@ -14,17 +14,14 @@ module.exports = async (req, res) => {
     try {
         const { userText, history } = req.body;
 
-        // Initialize Google and Pinecone
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
         const index = pc.index("usd-articles"); 
 
-        // 1. Get embedding from Google
         const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
         const userVector = await embeddingModel.embedContent(userText);
         const vector768 = userVector.embedding.values.slice(0, 768);
 
-        // 2. Search Pinecone for context
         const searchResults = await index.query({
             vector: vector768,
             topK: 2,
@@ -36,7 +33,6 @@ module.exports = async (req, res) => {
             contextText = searchResults.matches.map(match => match.metadata.content).join("\n\n");
         }
 
-        // 3. The Master System Prompt
         const systemPrompt = `=========================================
 MASTER DIRECTIVE: ULTIMATE SMILE DESIGN (USD) VOICE AGENT
 =========================================
@@ -69,24 +65,42 @@ INTENT ROUTING & END OF CONVERSATION PLAYBOOK:
 COMPANY FACTS:
 ${contextText}`;
 
-        // 4. Talk to Gemini 1.5 Flash (The New Brain!)
-        const chatModel = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-flash",
-            systemInstruction: systemPrompt 
+        const groqMessages = [{ role: "system", content: systemPrompt }];
+        if (history && history.length > 0) {
+            history.forEach(h => {
+                const role = h.role === 'model' ? 'assistant' : 'user';
+                const content = h.parts[0].text;
+                if (content) groqMessages.push({ role, content });
+            });
+        }
+        if (userText) groqMessages.push({ role: "user", content: userText });
+
+        // SWAPPED MODEL TO A HIGH-CAPACITY FALLBACK
+        const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: "llama3-8b-8192", 
+                messages: groqMessages,
+                max_tokens: 150
+            })
         });
 
-        // Gemini uses the exact format we already have in our frontend history!
-        const chatSession = chatModel.startChat({
-            history: history || []
-        });
+        // DETAILED ERROR LOGGING
+        if (!groqResponse.ok) {
+            const errText = await groqResponse.text();
+            console.error("Groq Raw Error:", errText);
+            throw new Error(`Groq API Error: ${errText}`);
+        }
 
-        const geminiResult = await chatSession.sendMessage(userText);
-        const botReplyText = geminiResult.response.text();
+        const groqData = await groqResponse.json();
+        const botReplyText = groqData.choices[0].message.content;
 
-        // Prepare text for Voice Engine
         const cleanSpokenText = botReplyText.replace('[END_CHAT]', '').trim();
 
-        // 5. Send Gemini's answer to Sarvam for the Voice Output
         const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
             method: 'POST',
             headers: {
@@ -101,6 +115,7 @@ ${contextText}`;
             })
         });
 
+        // DETAILED AUDIO ERROR LOGGING
         if (!sarvamResponse.ok) {
             const sarvamErr = await sarvamResponse.text();
             throw new Error(`Sarvam Audio Engine Failed: ${sarvamErr}`);
@@ -108,7 +123,6 @@ ${contextText}`;
         
         const sarvamData = await sarvamResponse.json();
 
-        // 6. Send everything back to the frontend
         res.status(200).json({ 
             replyText: botReplyText, 
             audioBase64: sarvamData.audios[0] 
