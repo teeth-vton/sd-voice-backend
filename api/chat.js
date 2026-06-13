@@ -27,7 +27,7 @@ module.exports = async (req, res) => {
                     speaker: "shreya",
                     model: "bulbul:v3",
                     speech_sample_rate: 8000,
-                    pace: 1.0 
+                    pace: 1.0 // FIXED: Slowed down to 1.0 for a softer, calmer, less aggressive tone
                 })
             });
 
@@ -50,12 +50,11 @@ module.exports = async (req, res) => {
                 const blob = new Blob([buffer], { type: `audio/${safeExt}` });
                 const formData = new FormData();
                 formData.append('file', blob, `audio.${safeExt}`);
-                formData.append('model', 'whisper-large-v3-turbo'); 
                 
-                // FIXED: Ban Whisper from hallucinating English and Prime it for Indian Languages
-                formData.append('temperature', '0.0'); 
-                formData.append('prompt', 'Hello, namaste, kem cho. Tumhara naam kya hai? I want smile design.'); 
+                // FIXED: Upgraded from "turbo" to the ultra-accurate "whisper-large-v3" for perfect regional dialects
+                formData.append('model', 'whisper-large-v3'); 
                 
+                // FIXED: Removed the Prompt guardrails to allow the model to auto-detect Gujarati natively
                 const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
                     method: 'POST',
                     headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}` },
