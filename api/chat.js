@@ -8,8 +8,6 @@ module.exports = async (req, res) => {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     if (req.method === 'OPTIONS') return res.status(200).end();
-    
-    // FIXED: Protects against random GET pings throwing an undefined crash!
     if (req.method === 'GET') return res.status(200).send("Backend Active");
 
     try {
@@ -41,76 +39,68 @@ module.exports = async (req, res) => {
         }
 
         // ==========================================
-        // ROUTE 2: VAPI CUSTOM VOICE (SARVAM STREAM)
+        // ROUTE 2: LIVE TRANSCRIPTION (Whisper Only)
         // ==========================================
-        if (body.message && body.message.type === 'voice-request') {
-            const textToSpeak = body.message.text;
+        if (body.type === 'transcribe_only' && body.audioBase64) {
+            try {
+                const safeExt = body.audioExt || 'webm'; 
+                const buffer = Buffer.from(body.audioBase64, 'base64');
+                const blob = new Blob([buffer], { type: `audio/${safeExt}` });
+                const formData = new FormData();
+                formData.append('file', blob, `audio.${safeExt}`);
+                formData.append('model', 'whisper-large-v3'); 
+                formData.append('temperature', '0.0'); 
+                formData.append('prompt', 'Hello, namaste, kem cho. Tumhara naam kya hai? I want smile design.'); 
 
-            const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
-                method: 'POST',
-                headers: {
-                    'api-subscription-key': process.env.SARVAM_API_KEY,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    inputs: [textToSpeak],
-                    target_language_code: "hi-IN",
-                    speaker: "shreya",
-                    model: "bulbul:v3",
-                    speech_sample_rate: 8000,
-                    pace: 1.0 
-                })
-            });
+                const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}` },
+                    body: formData
+                });
 
-            if (!sarvamResponse.ok) throw new Error("Sarvam TTS Failed");
-
-            const sarvamData = await sarvamResponse.json();
-            const audioBuffer = Buffer.from(sarvamData.audios[0], 'base64');
-
-            res.setHeader('Content-Type', 'audio/wav');
-            return res.status(200).send(audioBuffer);
+                if (whisperRes.ok) {
+                    const whisperData = await whisperRes.json();
+                    if (whisperData.text && whisperData.text.trim()) {
+                        const tText = whisperData.text.trim();
+                        if (tText.toLowerCase() === 'foreign' || tText.toLowerCase() === 'thank you') {
+                            return res.status(200).json({ transcribedText: "" });
+                        }
+                        return res.status(200).json({ transcribedText: tText });
+                    }
+                }
+            } catch (e) { console.error("Whisper Error:", e); }
+            return res.status(200).json({ transcribedText: "" });
         }
 
         // ==========================================
-        // ROUTE 3: VAPI CUSTOM LLM (PINECONE + GROQ)
+        // ROUTE 3: FULL CONVERSATION (Pinecone + Groq LLM + Sarvam)
         // ==========================================
-        let messages = null;
-        if (body.messages) messages = body.messages;
-        else if (body.message && body.message.messages) messages = body.message.messages;
+        let finalTextToProcess = body.userText;
 
-        if (messages) {
-            let userText = "";
-            for (let i = messages.length - 1; i >= 0; i--) {
-                if (messages[i].role === 'user') {
-                    userText = messages[i].content;
-                    break;
+        let contextText = "No relevant articles found.";
+        if (finalTextToProcess && finalTextToProcess.length > 2) {
+            try {
+                const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+                const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
+                const index = pc.index("usd-articles"); 
+
+                const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
+                const userVector = await embeddingModel.embedContent(finalTextToProcess);
+                const vector768 = userVector.embedding.values.slice(0, 768);
+
+                const searchResults = await index.query({
+                    vector: vector768,
+                    topK: 2,
+                    includeMetadata: true
+                });
+
+                if (searchResults.matches && searchResults.matches.length > 0) {
+                    contextText = searchResults.matches.map(match => match.metadata.content).join("\n\n");
                 }
-            }
+            } catch (e) { console.error("Pinecone Error:", e.message); }
+        }
 
-            let contextText = "No relevant articles found.";
-            if (userText && userText.length > 2) {
-                try {
-                    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-                    const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
-                    const index = pc.index("usd-articles"); 
-
-                    const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
-                    const userVector = await embeddingModel.embedContent(userText);
-                    const vector768 = userVector.embedding.values.slice(0, 768);
-
-                    const searchResults = await index.query({
-                        vector: vector768,
-                        topK: 2,
-                        includeMetadata: true
-                    });
-
-                    if (searchResults.matches && searchResults.matches.length > 0) {
-                        contextText = searchResults.matches.map(match => match.metadata.content).join("\n\n");
-                    }
-                } catch(e) { console.error("Pinecone Error:", e.message); }
-            }
-
-            const systemPrompt = `=========================================
+        const systemPrompt = `=========================================
 MASTER DIRECTIVE: ULTIMATE SMILE DESIGN (USD) VOICE AGENT
 =========================================
 IDENTITY: You are the official Voice AI Assistant of Ultimate Smile Design (USD). Always speak as "we", "our", and "us". NEVER identify yourself as ChatGPT, AI model, BIK, or any third-party platform. If asked who you are, say: "We are the support assistant of Ultimate Smile Design."
@@ -129,12 +119,12 @@ If NOT related to these topics, reply ONLY:
 "I am specifically designed to assist only with dental and Ultimate Smile Design–related queries."
 
 DOMAIN VALIDATION RULE:
-If a voice input contains BOTH dental and non-dental topics, do NOT answer only the dental portion. Determine the PRIMARY intent. If there is any ambiguity, treat the input as non-dental and reply ONLY with the refusal sentence above.
+If a voice input contains BOTH dental and non-dental topics, do NOT answer only the dental portion. Determine the PRIMARY intent. If there is any ambiguity, treat the input as non-dental and reply ONLY with the refusal sentence above. 
 Examples that MUST be refused: Einstein, Narendra Modi, Capital cities, Mathematics, Coding, Jokes, Celebrities, Sports, Movies, Business, Finance, Religion, Politics.
 
 ABSOLUTE LANGUAGE & PRONUNCIATION LAW (SARVAM VOICE ENGINE OPTIMIZED):
-1. MATCH LAST LANGUAGE: Always use ONLY the language from the user's most recent spoken input. Ignore the language used in previous turns. If the user changes language, switch instantly.
-2. PHONETIC CROSS-TRANSLATION (CRITICAL): Our speech-to-text engine writes English words using Devanagari (Hindi) script. If you read English words written in Hindi letters (e.g., "व्हाट इज स्माइल डिजाइन" or "यू कैन हेल्प यू"), YOU MUST RECOGNIZE IT IS ENGLISH AND REPLY IN PURE ENGLISH.
+1. MATCH LAST LANGUAGE: Always use ONLY the language from the user's most recent spoken input. Ignore the language used in previous turns. If the user changes language, switch instantly. 
+2. PHONETIC CROSS-TRANSLATION (CRITICAL): Our speech-to-text engine writes English words using Devanagari (Hindi) script. If you read English words written in Hindi letters (e.g., "व्हाट इज स्माइल डिजाइन" or "यू कैन हेल्प यू"), YOU MUST RECOGNIZE IT IS ENGLISH AND REPLY IN PURE ENGLISH. 
 3. GUJARATI STRICT PATCH: NEVER mix Hindi words in Gujarati. Use "kevi rite" (not kaise), "ne" (not ko), "thi" (not se), "su" (not kya), "thay che" (not hota), "bane che" (not banri).
 4. PHONETIC SPELLING: Because your text goes to an Indian Text-to-Speech engine, spell Hinglish and Gujlish phonetically. CRITICAL: Never write the Gujarati word "am" (the TTS will say "A.M." or "aam"). Write it as "em" or "aem".
 
@@ -157,63 +147,60 @@ INTENT ROUTING & VOICE PLAYBOOK (HOW TO ANSWER):
 COMPANY FACTS FOR EXTRA KNOWLEDGE:
 ${contextText}`;
 
-            // FIXED: Prevent Groq from repeating "Namaste" by injecting fake memory!
-            const assistantGreeting = { role: 'assistant', content: "Namaste! What's your thought on this? According to us, your smile looks very good and confident." };
-            const hasGreeting = messages.some(m => m.role === 'assistant' && m.content.includes("Namaste"));
-            
-            if (!hasGreeting) {
-                if (messages.length > 0 && messages[0].role === 'system') {
-                    messages[0].content = systemPrompt;
-                    messages.splice(1, 0, assistantGreeting);
-                } else {
-                    messages.unshift(assistantGreeting);
-                    messages.unshift({ role: 'system', content: systemPrompt });
-                }
-            } else {
-                if (messages.length > 0 && messages[0].role === 'system') {
-                    messages[0].content = systemPrompt;
-                } else {
-                    messages.unshift({ role: 'system', content: systemPrompt });
-                }
-            }
-
-            const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    model: "llama-3.3-70b-versatile",
-                    messages: messages,
-                    stream: true, 
-                    max_tokens: 150
-                })
+        const groqMessages = [{ role: "system", content: systemPrompt }];
+        if (body.history && body.history.length > 0) {
+            body.history.forEach(h => {
+                const role = h.role === 'model' ? 'assistant' : 'user';
+                const content = h.parts[0].text;
+                if (content) groqMessages.push({ role, content });
             });
-
-            if (!groqResponse.ok) throw new Error("Groq API Error");
-
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
-
-            // FIXED: Vercel Web Streams workaround to stop the 500 Server error!
-            const bodyStream = groqResponse.body;
-            if (bodyStream.pipe) {
-                bodyStream.pipe(res);
-            } else {
-                const reader = bodyStream.getReader();
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    res.write(Buffer.from(value));
-                }
-                return res.end();
-            }
-            return;
         }
+        if (finalTextToProcess) groqMessages.push({ role: "user", content: finalTextToProcess });
 
-        return res.status(200).json({ status: "ignored" });
+        const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: "llama-3.3-70b-versatile", 
+                messages: groqMessages,
+                max_tokens: 150
+            })
+        });
+
+        if (!groqResponse.ok) throw new Error(`Groq API Error`);
+
+        const groqData = await groqResponse.json();
+        const botReplyText = groqData.choices[0].message.content;
+
+        const cleanSpokenText = botReplyText.replace('[END_CHAT]', '').trim();
+
+        const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
+            method: 'POST',
+            headers: {
+                'api-subscription-key': process.env.SARVAM_API_KEY,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                inputs: [cleanSpokenText],
+                target_language_code: "hi-IN",
+                speaker: "shreya", 
+                model: "bulbul:v3",
+                speech_sample_rate: 8000, 
+                pace: 1.0 
+            })
+        });
+
+        if (!sarvamResponse.ok) throw new Error(`Sarvam Audio Engine Failed`);
+        
+        const sarvamData = await sarvamResponse.json();
+
+        res.status(200).json({ 
+            replyText: botReplyText, 
+            audioBase64: sarvamData.audios[0]
+        });
 
     } catch (error) {
         console.error("Backend Error:", error);
