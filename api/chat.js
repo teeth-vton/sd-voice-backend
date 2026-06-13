@@ -12,9 +12,10 @@ return res.status(200).end();
 }
 
 try {
-const { userText, history, type, text, audioBase64, audioExt } = req.body;
-
-if (type === 'tts') {
+// ==========================================
+// ROUTE 1: FRONTEND POPUP / INITIAL GREETING
+// ==========================================
+if (req.body.type === 'tts') {
 const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
 method: 'POST',
 headers: {
@@ -22,73 +23,74 @@ headers: {
 'Content-Type': 'application/json'
 },
 body: JSON.stringify({
-inputs: [text],
+inputs: [req.body.text],
 target_language_code: "hi-IN",
 speaker: "shreya",
 model: "bulbul:v3",
 speech_sample_rate: 8000,
-pace: 1.0 // FIXED: Slowed down to 1.0 for a softer, calmer, less aggressive tone
+pace: 1.0 
 })
 });
 
-if (!sarvamResponse.ok) {
-const sarvamErr = await sarvamResponse.text();
-throw new Error(`Sarvam Audio Engine Failed: ${sarvamErr}`);
-}
+if (!sarvamResponse.ok) throw new Error("Sarvam TTS Failed");
 const sarvamData = await sarvamResponse.json();
 return res.status(200).json({ audioBase64: sarvamData.audios[0] });
 }
 
-let finalTextToProcess = userText;
-let whisperError = null;
+// ==========================================
+// ROUTE 2: VAPI CUSTOM VOICE (SARVAM STREAM)
+// ==========================================
+if (req.body.message && req.body.message.type === 'voice-request') {
+const textToSpeak = req.body.message.text;
 
-if (audioBase64) {
-try {
-const safeExt = audioExt || 'webm';
-const buffer = Buffer.from(audioBase64, 'base64');
-const blob = new Blob([buffer], { type: `audio/${safeExt}` });
-const formData = new FormData();
-formData.append('file', blob, `audio.${safeExt}`);
-// FIXED: Upgraded from "turbo" to the ultra-accurate "whisper-large-v3" for perfect regional dialects
-formData.append('model', 'whisper-large-v3');
-
-// --- THE FIX IS HERE: Forces Whisper to expect Indian languages and stops hallucinations ---
-formData.append('temperature', '0.0'); 
-formData.append('prompt', 'Hello, namaste, kem cho. Tumhara naam kya hai? I want smile design.'); 
-
-const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
 method: 'POST',
-headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}` },
-body: formData
+headers: {
+'api-subscription-key': process.env.SARVAM_API_KEY,
+'Content-Type': 'application/json'
+},
+body: JSON.stringify({
+inputs: [textToSpeak],
+target_language_code: "hi-IN",
+speaker: "shreya",
+model: "bulbul:v3",
+speech_sample_rate: 8000,
+pace: 1.0 
+})
 });
 
-if (whisperRes.ok) {
-const whisperData = await whisperRes.json();
-if (whisperData.text && whisperData.text.trim()) {
-const tText = whisperData.text.trim();
-// WHISPER SILENCE BUG GUARD
-if (tText.toLowerCase() === 'foreign' || tText.toLowerCase() === 'foreign.' || tText.toLowerCase() === 'thank you' || tText.toLowerCase() === 'thank you.' || tText.toLowerCase() === 'subtitles by amara' || tText.toLowerCase() === 'the water to land gather' || tText.toLowerCase() === 'the water to land gather.') {
-console.log("Whisper silence bug detected. Falling back to browser text.");
-} else {
-finalTextToProcess = tText;
+if (!sarvamResponse.ok) throw new Error("Sarvam TTS Failed");
+
+const sarvamData = await sarvamResponse.json();
+const audioBuffer = Buffer.from(sarvamData.audios[0], 'base64');
+
+res.setHeader('Content-Type', 'audio/wav');
+return res.status(200).send(audioBuffer);
 }
-}
-} else {
-whisperError = await whisperRes.text();
-console.error("Whisper API Error:", whisperError);
-}
-} catch (e) {
-whisperError = e.message;
-console.error("Whisper processing failed:", e);
+
+// ==========================================
+// ROUTE 3: VAPI CUSTOM LLM (PINECONE + GROQ)
+// ==========================================
+if (req.body.message && req.body.message.type === 'conversation-update' || req.body.messages) {
+const messages = req.body.messages || req.body.message.messages;
+
+let userText = "";
+for (let i = messages.length - 1; i >= 0; i--) {
+if (messages[i].role === 'user') {
+userText = messages[i].content;
+break;
 }
 }
 
+let contextText = "No relevant articles found.";
+if (userText && userText.length > 2) {
+try {
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
-const index = pc.index("usd-articles");
+const index = pc.index("usd-articles"); 
 
 const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
-const userVector = await embeddingModel.embedContent(finalTextToProcess);
+const userVector = await embeddingModel.embedContent(userText);
 const vector768 = userVector.embedding.values.slice(0, 768);
 
 const searchResults = await index.query({
@@ -97,9 +99,10 @@ topK: 2,
 includeMetadata: true
 });
 
-let contextText = "No relevant articles found.";
 if (searchResults.matches && searchResults.matches.length > 0) {
 contextText = searchResults.matches.map(match => match.metadata.content).join("\n\n");
+}
+} catch(e) { console.error("Pinecone Error:", e.message); }
 }
 
 const systemPrompt = `=========================================
@@ -149,15 +152,11 @@ INTENT ROUTING & VOICE PLAYBOOK (HOW TO ANSWER):
 COMPANY FACTS FOR EXTRA KNOWLEDGE:
 ${contextText}`;
 
-const groqMessages = [{ role: "system", content: systemPrompt }];
-if (history && history.length > 0) {
-history.forEach(h => {
-const role = h.role === 'model' ? 'assistant' : 'user';
-const content = h.parts[0].text;
-if (content) groqMessages.push({ role, content });
-});
+if (messages.length > 0 && messages[0].role === 'system') {
+messages[0].content = systemPrompt;
+} else {
+messages.unshift({ role: 'system', content: systemPrompt });
 }
-if (finalTextToProcess) groqMessages.push({ role: "user", content: finalTextToProcess });
 
 const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
 method: 'POST',
@@ -167,50 +166,35 @@ headers: {
 },
 body: JSON.stringify({
 model: "llama-3.3-70b-versatile",
-messages: groqMessages,
+messages: messages,
+stream: true, // Vapi requires instant WebRTC streaming!
 max_tokens: 150
 })
 });
 
-if (!groqResponse.ok) {
-const errText = await groqResponse.text();
-console.error("Groq Raw Error:", errText);
-throw new Error(`Groq API Error: ${errText}`);
+if (!groqResponse.ok) throw new Error("Groq API Error");
+
+res.setHeader('Content-Type', 'text/event-stream');
+res.setHeader('Cache-Control', 'no-cache');
+res.setHeader('Connection', 'keep-alive');
+
+const body = groqResponse.body;
+if (body.pipe) {
+body.pipe(res);
+} else {
+const reader = body.getReader();
+const decoder = new TextDecoder("utf-8");
+while (true) {
+const { done, value } = await reader.read();
+if (done) break;
+res.write(decoder.decode(value, { stream: true }));
+}
+return res.end();
+}
+return;
 }
 
-const groqData = await groqResponse.json();
-const botReplyText = groqData.choices[0].message.content;
-
-const cleanSpokenText = botReplyText.replace('[END_CHAT]', '').trim();
-
-const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
-method: 'POST',
-headers: {
-'api-subscription-key': process.env.SARVAM_API_KEY,
-'Content-Type': 'application/json'
-},
-body: JSON.stringify({
-inputs: [cleanSpokenText],
-target_language_code: "hi-IN",
-speaker: "shreya",
-model: "bulbul:v3",
-speech_sample_rate: 8000,
-pace: 1.0
-})
-});
-
-if (!sarvamResponse.ok) {
-const sarvamErr = await sarvamResponse.text();
-throw new Error(`Sarvam Audio Engine Failed: ${sarvamErr}`);
-}
-const sarvamData = await sarvamResponse.json();
-
-res.status(200).json({
-replyText: botReplyText,
-audioBase64: sarvamData.audios[0],
-transcribedText: finalTextToProcess, // Shows exactly what Whisper heard!
-whisperError: whisperError // Exposes any formatting errors directly to UI
-});
+res.status(400).json({ error: "Invalid request payload" });
 
 } catch (error) {
 console.error("Backend Error:", error);
