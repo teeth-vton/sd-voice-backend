@@ -53,6 +53,10 @@ module.exports = async (req, res) => {
                 formData.append('file', blob, `audio.${safeExt}`);
                 formData.append('model', 'whisper-large-v3-turbo'); 
                 
+                // FIXED: Ban Whisper from hallucinating English and Prime it for Indian Languages
+                formData.append('temperature', '0.0'); 
+                formData.append('prompt', 'Namaste, kem cho. Tumhara naam kya hai? I want smile design.'); 
+                
                 const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
                     method: 'POST',
                     headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}` },
@@ -64,7 +68,7 @@ module.exports = async (req, res) => {
                     if (whisperData.text && whisperData.text.trim()) {
                         const tText = whisperData.text.trim();
                         // WHISPER SILENCE BUG GUARD: If it hears nothing, it hallucinates these words
-                        if (tText.toLowerCase() === 'foreign' || tText.toLowerCase() === 'foreign.' || tText.toLowerCase() === 'thank you' || tText.toLowerCase() === 'thank you.') {
+                        if (tText.toLowerCase() === 'foreign' || tText.toLowerCase() === 'foreign.' || tText.toLowerCase() === 'thank you' || tText.toLowerCase() === 'thank you.' || tText.toLowerCase() === 'subtitles by amara' || tText.toLowerCase() === 'the water to land gather' || tText.toLowerCase() === 'the water to land gather.') {
                             console.log("Whisper silence bug detected. Falling back to browser text.");
                         } else {
                             finalTextToProcess = tText;
