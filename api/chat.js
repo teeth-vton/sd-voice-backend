@@ -9,7 +9,7 @@ module.exports = async (req, res) => {
 
     if (req.method === 'OPTIONS') return res.status(200).end();
     
-    // CRASH FIX: Vapi sends empty GET requests. This stops Vercel from crashing!
+    // FIXED: Protects against random GET pings throwing an undefined crash!
     if (req.method === 'GET') return res.status(200).send("Backend Active");
 
     try {
@@ -157,7 +157,7 @@ INTENT ROUTING & VOICE PLAYBOOK (HOW TO ANSWER):
 COMPANY FACTS FOR EXTRA KNOWLEDGE:
 ${contextText}`;
 
-            // MEMORY FIX: Force Groq to remember it already greeted you so it never repeats "Namaste"!
+            // FIXED: Prevent Groq from repeating "Namaste" by injecting fake memory!
             const assistantGreeting = { role: 'assistant', content: "Namaste! What's your thought on this? According to us, your smile looks very good and confident." };
             const hasGreeting = messages.some(m => m.role === 'assistant' && m.content.includes("Namaste"));
             
@@ -197,6 +197,7 @@ ${contextText}`;
             res.setHeader('Cache-Control', 'no-cache');
             res.setHeader('Connection', 'keep-alive');
 
+            // FIXED: Vercel Web Streams workaround to stop the 500 Server error!
             const bodyStream = groqResponse.body;
             if (bodyStream.pipe) {
                 bodyStream.pipe(res);
@@ -212,7 +213,6 @@ ${contextText}`;
             return;
         }
 
-        // Fallback for unauthorized/unknown JSON payloads
         return res.status(200).json({ status: "ignored" });
 
     } catch (error) {
