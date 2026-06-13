@@ -12,7 +12,7 @@ module.exports = async (req, res) => {
     }
 
     try {
-        const { userText, history, type, text } = req.body;
+        const { userText, history, type, text, audioBase64 } = req.body;
 
         if (type === 'tts') {
             const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
@@ -40,12 +40,40 @@ module.exports = async (req, res) => {
             return res.status(200).json({ audioBase64: sarvamData.audios[0] });
         }
 
+        // EXTRA FEATURE: Groq Whisper Audio Interception!
+        // We bypass the browser's faulty text and use Whisper to get the perfect text instead.
+        let finalTextToProcess = userText; 
+        if (audioBase64) {
+            try {
+                const buffer = Buffer.from(audioBase64, 'base64');
+                const blob = new Blob([buffer], { type: 'audio/webm' });
+                const formData = new FormData();
+                formData.append('file', blob, 'audio.webm');
+                formData.append('model', 'whisper-large-v3-turbo'); 
+                
+                const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}` },
+                    body: formData
+                });
+
+                if (whisperRes.ok) {
+                    const whisperData = await whisperRes.json();
+                    if (whisperData.text && whisperData.text.trim()) {
+                        finalTextToProcess = whisperData.text.trim();
+                    }
+                } else {
+                    console.error("Whisper Error:", await whisperRes.text());
+                }
+            } catch (e) { console.error("Whisper processing failed:", e); }
+        }
+
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
         const index = pc.index("usd-articles"); 
 
         const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
-        const userVector = await embeddingModel.embedContent(userText);
+        const userVector = await embeddingModel.embedContent(finalTextToProcess);
         const vector768 = userVector.embedding.values.slice(0, 768);
 
         const searchResults = await index.query({
@@ -114,7 +142,7 @@ ${contextText}`;
                 if (content) groqMessages.push({ role, content });
             });
         }
-        if (userText) groqMessages.push({ role: "user", content: userText });
+        if (finalTextToProcess) groqMessages.push({ role: "user", content: finalTextToProcess });
 
         const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
@@ -165,7 +193,8 @@ ${contextText}`;
 
         res.status(200).json({ 
             replyText: botReplyText, 
-            audioBase64: sarvamData.audios[0] 
+            audioBase64: sarvamData.audios[0],
+            transcribedText: finalTextToProcess // Return exactly what Whisper heard back to the UI!
         });
 
     } catch (error) {
