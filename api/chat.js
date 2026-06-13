@@ -14,7 +14,6 @@ module.exports = async (req, res) => {
     try {
         const { userText, history, type, text } = req.body;
 
-        // NEW: TTS-ONLY ROUTE FOR INITIAL GREETING (Bypasses Groq)
         if (type === 'tts') {
             const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
                 method: 'POST',
@@ -28,7 +27,7 @@ module.exports = async (req, res) => {
                     speaker: "shreya",
                     model: "bulbul:v3",
                     speech_sample_rate: 8000,
-                    pace: 1.1
+                    pace: 1.0 // FIXED: Slowed down to 1.0 for a softer, calmer, less aggressive tone
                 })
             });
 
@@ -41,7 +40,6 @@ module.exports = async (req, res) => {
             return res.status(200).json({ audioBase64: sarvamData.audios[0] });
         }
 
-        // STANDARD CHAT ROUTE
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
         const index = pc.index("usd-articles"); 
@@ -71,7 +69,7 @@ BRAND RECOGNITION (CRITICAL): Rapidly and naturally mention "Ultimate Smile Desi
 SPOKEN AUDIO CONSTRAINTS (CRITICAL):
 1. LENGTH: Keep every reply to MAXIMUM 1-2 short sentences. You are speaking on a live voice call.
 2. FORMAT: NO emojis, NO markdown, NO bullet points.
-3. LINKS: NEVER speak raw URLs (like h-t-t-p-s). Verbally guide them to website pages instead (e.g., "visit our Contact page").
+3. LINKS: NEVER speak raw URLs. Verbally guide them to website pages instead (e.g., "visit our Contact page").
 
 STRICT DOMAIN CLASSIFIER (MANDATORY & DOUBLE-LOCKED):
 Before answering ANY voice input, determine whether the user's spoken words are primarily related to: teeth, tooth, gums, oral health, dental care, smile design, cosmetic dentistry, veneers, aligners, braces, implants, whitening, tooth pain, gum pain, bleeding gums, missing/crooked teeth, tooth gap, smile makeover, dentists, dental consultation, or Ultimate Smile Design services.
@@ -84,10 +82,10 @@ If a voice input contains BOTH dental and non-dental topics, do NOT answer only 
 Examples that MUST be refused: Einstein, Narendra Modi, Capital cities, Mathematics, Coding, Jokes, Celebrities, Sports, Movies, Business, Finance, Religion, Politics.
 
 ABSOLUTE LANGUAGE & PRONUNCIATION LAW (SARVAM VOICE ENGINE OPTIMIZED):
-1. MATCH LAST LANGUAGE: Always use ONLY the language from the user's most recent spoken input. Ignore the language used in previous turns. If the user changes language, switch instantly. Never default to English if they spoke Hindi/Gujarati.
-2. GUJARATI STRICT PATCH: NEVER mix Hindi words in Gujarati. 
-   - Use "kevi rite" (not kaise), "ne" (not ko), "thi" (not se), "su" (not kya), "thay che" (not hota), "bane che" (not banri).
-3. PHONETIC SPELLING: Because your text goes to an Indian Text-to-Speech engine, spell Hinglish and Gujlish phonetically. CRITICAL: Never write the Gujarati word "am" (the TTS will say "A.M." or "aam"). Write it as "em" or "aem".
+1. MATCH LAST LANGUAGE: Always use ONLY the language from the user's most recent spoken input. Ignore the language used in previous turns. If the user changes language, switch instantly. 
+2. PHONETIC CROSS-TRANSLATION (CRITICAL): Our speech-to-text engine writes English words using Devanagari (Hindi) script. If you read English words written in Hindi letters (e.g., "व्हाट इज स्माइल डिजाइन" or "यू कैन हेल्प यू"), YOU MUST RECOGNIZE IT IS ENGLISH AND REPLY IN PURE ENGLISH. 
+3. GUJARATI STRICT PATCH: NEVER mix Hindi words in Gujarati. Use "kevi rite" (not kaise), "ne" (not ko), "thi" (not se), "su" (not kya), "thay che" (not hota), "bane che" (not banri).
+4. PHONETIC SPELLING: Because your text goes to an Indian Text-to-Speech engine, spell Hinglish and Gujlish phonetically. CRITICAL: Never write the Gujarati word "am" (the TTS will say "A.M." or "aam"). Write it as "em" or "aem".
 
 PATIENT & DENTIST GUIDANCE:
 Provide simple and professional spoken guidance. Never guarantee results, timelines, or success rates. Make it clear that final decisions require a qualified dentist.
@@ -154,7 +152,7 @@ ${contextText}`;
                 speaker: "shreya", 
                 model: "bulbul:v3",
                 speech_sample_rate: 8000, 
-                pace: 1.1 
+                pace: 1.0 // FIXED: Slowed down to 1.0 here as well
             })
         });
 
