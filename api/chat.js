@@ -2,110 +2,114 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { Pinecone } = require('@pinecone-database/pinecone');
 
 module.exports = async (req, res) => {
-const origin = req.headers.origin || '*';
-res.setHeader('Access-Control-Allow-Origin', origin);
-res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS, POST');
-res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    const origin = req.headers.origin || '*';
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS, POST');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
-if (req.method === 'OPTIONS') {
-return res.status(200).end();
-}
+    if (req.method === 'OPTIONS') return res.status(200).end();
+    
+    // FIXED: Protects against random GET pings throwing an undefined crash!
+    if (req.method === 'GET') return res.status(200).send("Backend Active");
 
-try {
-// ==========================================
-// ROUTE 1: FRONTEND POPUP / INITIAL GREETING
-// ==========================================
-if (req.body.type === 'tts') {
-const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
-method: 'POST',
-headers: {
-'api-subscription-key': process.env.SARVAM_API_KEY,
-'Content-Type': 'application/json'
-},
-body: JSON.stringify({
-inputs: [req.body.text],
-target_language_code: "hi-IN",
-speaker: "shreya",
-model: "bulbul:v3",
-speech_sample_rate: 8000,
-pace: 1.0 
-})
-});
+    try {
+        // FIXED: Safe body destructuring prevents the Vercel 500 error!
+        const body = req.body || {};
 
-if (!sarvamResponse.ok) throw new Error("Sarvam TTS Failed");
-const sarvamData = await sarvamResponse.json();
-return res.status(200).json({ audioBase64: sarvamData.audios[0] });
-}
+        // ==========================================
+        // ROUTE 1: FRONTEND POPUP / INITIAL GREETING
+        // ==========================================
+        if (body.type === 'tts') {
+            const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
+                method: 'POST',
+                headers: {
+                    'api-subscription-key': process.env.SARVAM_API_KEY,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    inputs: [body.text],
+                    target_language_code: "hi-IN",
+                    speaker: "shreya",
+                    model: "bulbul:v3",
+                    speech_sample_rate: 8000,
+                    pace: 1.0 
+                })
+            });
 
-// ==========================================
-// ROUTE 2: VAPI CUSTOM VOICE (SARVAM STREAM)
-// ==========================================
-if (req.body.message && req.body.message.type === 'voice-request') {
-const textToSpeak = req.body.message.text;
+            if (!sarvamResponse.ok) throw new Error("Sarvam TTS Failed");
+            const sarvamData = await sarvamResponse.json();
+            return res.status(200).json({ audioBase64: sarvamData.audios[0] });
+        }
 
-const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
-method: 'POST',
-headers: {
-'api-subscription-key': process.env.SARVAM_API_KEY,
-'Content-Type': 'application/json'
-},
-body: JSON.stringify({
-inputs: [textToSpeak],
-target_language_code: "hi-IN",
-speaker: "shreya",
-model: "bulbul:v3",
-speech_sample_rate: 8000,
-pace: 1.0 
-})
-});
+        // ==========================================
+        // ROUTE 2: VAPI CUSTOM VOICE (SARVAM STREAM)
+        // ==========================================
+        if (body.message && body.message.type === 'voice-request') {
+            const textToSpeak = body.message.text;
 
-if (!sarvamResponse.ok) throw new Error("Sarvam TTS Failed");
+            const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
+                method: 'POST',
+                headers: {
+                    'api-subscription-key': process.env.SARVAM_API_KEY,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    inputs: [textToSpeak],
+                    target_language_code: "hi-IN",
+                    speaker: "shreya",
+                    model: "bulbul:v3",
+                    speech_sample_rate: 8000,
+                    pace: 1.0 
+                })
+            });
 
-const sarvamData = await sarvamResponse.json();
-const audioBuffer = Buffer.from(sarvamData.audios[0], 'base64');
+            if (!sarvamResponse.ok) throw new Error("Sarvam TTS Failed");
 
-res.setHeader('Content-Type', 'audio/wav');
-return res.status(200).send(audioBuffer);
-}
+            const sarvamData = await sarvamResponse.json();
+            const audioBuffer = Buffer.from(sarvamData.audios[0], 'base64');
 
-// ==========================================
-// ROUTE 3: VAPI CUSTOM LLM (PINECONE + GROQ)
-// ==========================================
-if (req.body.message && req.body.message.type === 'conversation-update' || req.body.messages) {
-const messages = req.body.messages || req.body.message.messages;
+            res.setHeader('Content-Type', 'audio/wav');
+            return res.status(200).send(audioBuffer);
+        }
 
-let userText = "";
-for (let i = messages.length - 1; i >= 0; i--) {
-if (messages[i].role === 'user') {
-userText = messages[i].content;
-break;
-}
-}
+        // ==========================================
+        // ROUTE 3: VAPI CUSTOM LLM (PINECONE + GROQ)
+        // ==========================================
+        if ((body.message && (body.message.type === 'conversation-update' || body.message.messages)) || body.messages) {
+            const messages = body.messages || body.message.messages;
 
-let contextText = "No relevant articles found.";
-if (userText && userText.length > 2) {
-try {
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
-const index = pc.index("usd-articles"); 
+            let userText = "";
+            for (let i = messages.length - 1; i >= 0; i--) {
+                if (messages[i].role === 'user') {
+                    userText = messages[i].content;
+                    break;
+                }
+            }
 
-const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
-const userVector = await embeddingModel.embedContent(userText);
-const vector768 = userVector.embedding.values.slice(0, 768);
+            let contextText = "No relevant articles found.";
+            if (userText && userText.length > 2) {
+                try {
+                    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+                    const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
+                    const index = pc.index("usd-articles"); 
 
-const searchResults = await index.query({
-vector: vector768,
-topK: 2,
-includeMetadata: true
-});
+                    const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
+                    const userVector = await embeddingModel.embedContent(userText);
+                    const vector768 = userVector.embedding.values.slice(0, 768);
 
-if (searchResults.matches && searchResults.matches.length > 0) {
-contextText = searchResults.matches.map(match => match.metadata.content).join("\n\n");
-}
-} catch(e) { console.error("Pinecone Error:", e.message); }
-}
+                    const searchResults = await index.query({
+                        vector: vector768,
+                        topK: 2,
+                        includeMetadata: true
+                    });
 
-const systemPrompt = `=========================================
+                    if (searchResults.matches && searchResults.matches.length > 0) {
+                        contextText = searchResults.matches.map(match => match.metadata.content).join("\n\n");
+                    }
+                } catch(e) { console.error("Pinecone Error:", e.message); }
+            }
+
+            const systemPrompt = `=========================================
 MASTER DIRECTIVE: ULTIMATE SMILE DESIGN (USD) VOICE AGENT
 =========================================
 IDENTITY: You are the official Voice AI Assistant of Ultimate Smile Design (USD). Always speak as "we", "our", and "us". NEVER identify yourself as ChatGPT, AI model, BIK, or any third-party platform. If asked who you are, say: "We are the support assistant of Ultimate Smile Design."
@@ -152,52 +156,52 @@ INTENT ROUTING & VOICE PLAYBOOK (HOW TO ANSWER):
 COMPANY FACTS FOR EXTRA KNOWLEDGE:
 ${contextText}`;
 
-if (messages.length > 0 && messages[0].role === 'system') {
-messages[0].content = systemPrompt;
-} else {
-messages.unshift({ role: 'system', content: systemPrompt });
-}
+            if (messages.length > 0 && messages[0].role === 'system') {
+                messages[0].content = systemPrompt;
+            } else {
+                messages.unshift({ role: 'system', content: systemPrompt });
+            }
 
-const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-method: 'POST',
-headers: {
-'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-'Content-Type': 'application/json'
-},
-body: JSON.stringify({
-model: "llama-3.3-70b-versatile",
-messages: messages,
-stream: true, // Vapi requires instant WebRTC streaming!
-max_tokens: 150
-})
-});
+            const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    model: "llama-3.3-70b-versatile",
+                    messages: messages,
+                    stream: true, 
+                    max_tokens: 150
+                })
+            });
 
-if (!groqResponse.ok) throw new Error("Groq API Error");
+            if (!groqResponse.ok) throw new Error("Groq API Error");
 
-res.setHeader('Content-Type', 'text/event-stream');
-res.setHeader('Cache-Control', 'no-cache');
-res.setHeader('Connection', 'keep-alive');
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
 
-const body = groqResponse.body;
-if (body.pipe) {
-body.pipe(res);
-} else {
-const reader = body.getReader();
-const decoder = new TextDecoder("utf-8");
-while (true) {
-const { done, value } = await reader.read();
-if (done) break;
-res.write(decoder.decode(value, { stream: true }));
-}
-return res.end();
-}
-return;
-}
+            const bodyStream = groqResponse.body;
+            if (bodyStream.pipe) {
+                bodyStream.pipe(res);
+            } else {
+                const reader = bodyStream.getReader();
+                const decoder = new TextDecoder("utf-8");
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    res.write(decoder.decode(value, { stream: true }));
+                }
+                return res.end();
+            }
+            return;
+        }
 
-res.status(400).json({ error: "Invalid request payload" });
+        return res.status(400).json({ error: "Invalid route" });
 
-} catch (error) {
-console.error("Backend Error:", error);
-res.status(500).json({ error: error.message });
-}
+    } catch (error) {
+        console.error("Backend Error:", error);
+        res.status(500).json({ error: error.message });
+    }
 };
