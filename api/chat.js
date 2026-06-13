@@ -51,7 +51,11 @@ const formData = new FormData();
 formData.append('file', blob, `audio.${safeExt}`);
 // FIXED: Upgraded from "turbo" to the ultra-accurate "whisper-large-v3" for perfect regional dialects
 formData.append('model', 'whisper-large-v3');
-// FIXED: Removed the Prompt guardrails to allow the model to auto-detect Gujarati natively
+
+// --- THE FIX IS HERE: Forces Whisper to expect Indian languages and stops hallucinations ---
+formData.append('temperature', '0.0'); 
+formData.append('prompt', 'Hello, namaste, kem cho. Tumhara naam kya hai? I want smile design.'); 
+
 const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
 method: 'POST',
 headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}` },
