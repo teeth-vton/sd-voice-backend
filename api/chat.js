@@ -12,7 +12,7 @@ module.exports = async (req, res) => {
     }
 
     try {
-        const { userText, history, type, text, audioBase64 } = req.body;
+        const { userText, history, type, text, audioBase64, audioExt } = req.body;
 
         if (type === 'tts') {
             const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
@@ -40,15 +40,17 @@ module.exports = async (req, res) => {
             return res.status(200).json({ audioBase64: sarvamData.audios[0] });
         }
 
-        // EXTRA FEATURE: Groq Whisper Audio Interception!
-        // We bypass the browser's faulty text and use Whisper to get the perfect text instead.
+        // EXTRA FEATURE: Groq Whisper Audio Interception (Safe File Parsing)
         let finalTextToProcess = userText; 
+        let whisperError = null;
+
         if (audioBase64) {
             try {
+                const safeExt = audioExt || 'webm'; 
                 const buffer = Buffer.from(audioBase64, 'base64');
-                const blob = new Blob([buffer], { type: 'audio/webm' });
+                const blob = new Blob([buffer], { type: `audio/${safeExt}` });
                 const formData = new FormData();
-                formData.append('file', blob, 'audio.webm');
+                formData.append('file', blob, `audio.${safeExt}`);
                 formData.append('model', 'whisper-large-v3-turbo'); 
                 
                 const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
@@ -63,9 +65,13 @@ module.exports = async (req, res) => {
                         finalTextToProcess = whisperData.text.trim();
                     }
                 } else {
-                    console.error("Whisper Error:", await whisperRes.text());
+                    whisperError = await whisperRes.text();
+                    console.error("Whisper API Error:", whisperError);
                 }
-            } catch (e) { console.error("Whisper processing failed:", e); }
+            } catch (e) { 
+                whisperError = e.message;
+                console.error("Whisper processing failed:", e); 
+            }
         }
 
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -194,7 +200,8 @@ ${contextText}`;
         res.status(200).json({ 
             replyText: botReplyText, 
             audioBase64: sarvamData.audios[0],
-            transcribedText: finalTextToProcess // Return exactly what Whisper heard back to the UI!
+            transcribedText: finalTextToProcess, // Shows exactly what Whisper heard!
+            whisperError: whisperError // Exposes any formatting errors directly to UI
         });
 
     } catch (error) {
