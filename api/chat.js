@@ -9,11 +9,10 @@ module.exports = async (req, res) => {
 
     if (req.method === 'OPTIONS') return res.status(200).end();
     
-    // FIXED: Protects against random GET pings throwing an undefined crash!
+    // CRASH FIX: Vapi sends empty GET requests. This stops Vercel from crashing!
     if (req.method === 'GET') return res.status(200).send("Backend Active");
 
     try {
-        // FIXED: Safe body destructuring prevents the Vercel 500 error!
         const body = req.body || {};
 
         // ==========================================
@@ -75,9 +74,11 @@ module.exports = async (req, res) => {
         // ==========================================
         // ROUTE 3: VAPI CUSTOM LLM (PINECONE + GROQ)
         // ==========================================
-        if ((body.message && (body.message.type === 'conversation-update' || body.message.messages)) || body.messages) {
-            const messages = body.messages || body.message.messages;
+        let messages = null;
+        if (body.messages) messages = body.messages;
+        else if (body.message && body.message.messages) messages = body.message.messages;
 
+        if (messages) {
             let userText = "";
             for (let i = messages.length - 1; i >= 0; i--) {
                 if (messages[i].role === 'user') {
@@ -156,10 +157,24 @@ INTENT ROUTING & VOICE PLAYBOOK (HOW TO ANSWER):
 COMPANY FACTS FOR EXTRA KNOWLEDGE:
 ${contextText}`;
 
-            if (messages.length > 0 && messages[0].role === 'system') {
-                messages[0].content = systemPrompt;
+            // MEMORY FIX: Force Groq to remember it already greeted you so it never repeats "Namaste"!
+            const assistantGreeting = { role: 'assistant', content: "Namaste! What's your thought on this? According to us, your smile looks very good and confident." };
+            const hasGreeting = messages.some(m => m.role === 'assistant' && m.content.includes("Namaste"));
+            
+            if (!hasGreeting) {
+                if (messages.length > 0 && messages[0].role === 'system') {
+                    messages[0].content = systemPrompt;
+                    messages.splice(1, 0, assistantGreeting);
+                } else {
+                    messages.unshift(assistantGreeting);
+                    messages.unshift({ role: 'system', content: systemPrompt });
+                }
             } else {
-                messages.unshift({ role: 'system', content: systemPrompt });
+                if (messages.length > 0 && messages[0].role === 'system') {
+                    messages[0].content = systemPrompt;
+                } else {
+                    messages.unshift({ role: 'system', content: systemPrompt });
+                }
             }
 
             const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -187,18 +202,18 @@ ${contextText}`;
                 bodyStream.pipe(res);
             } else {
                 const reader = bodyStream.getReader();
-                const decoder = new TextDecoder("utf-8");
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
-                    res.write(decoder.decode(value, { stream: true }));
+                    res.write(Buffer.from(value));
                 }
                 return res.end();
             }
             return;
         }
 
-        return res.status(400).json({ error: "Invalid route" });
+        // Fallback for unauthorized/unknown JSON payloads
+        return res.status(200).json({ status: "ignored" });
 
     } catch (error) {
         console.error("Backend Error:", error);
