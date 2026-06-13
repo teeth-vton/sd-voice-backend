@@ -62,7 +62,13 @@ module.exports = async (req, res) => {
                 if (whisperRes.ok) {
                     const whisperData = await whisperRes.json();
                     if (whisperData.text && whisperData.text.trim()) {
-                        finalTextToProcess = whisperData.text.trim();
+                        const tText = whisperData.text.trim();
+                        // WHISPER SILENCE BUG GUARD: If it hears nothing, it hallucinates these words
+                        if (tText.toLowerCase() === 'foreign' || tText.toLowerCase() === 'foreign.' || tText.toLowerCase() === 'thank you' || tText.toLowerCase() === 'thank you.') {
+                            console.log("Whisper silence bug detected. Falling back to browser text.");
+                        } else {
+                            finalTextToProcess = tText;
+                        }
                     }
                 } else {
                     whisperError = await whisperRes.text();
