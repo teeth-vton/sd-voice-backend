@@ -27,7 +27,7 @@ module.exports = async (req, res) => {
                     speaker: "shreya",
                     model: "bulbul:v3",
                     speech_sample_rate: 8000,
-                    pace: 1.0 // FIXED: Slowed down to 1.0 for a softer, calmer, less aggressive tone
+                    pace: 1.0 
                 })
             });
 
@@ -40,7 +40,6 @@ module.exports = async (req, res) => {
             return res.status(200).json({ audioBase64: sarvamData.audios[0] });
         }
 
-        // EXTRA FEATURE: Groq Whisper Audio Interception (Safe File Parsing)
         let finalTextToProcess = userText; 
         let whisperError = null;
 
@@ -55,7 +54,7 @@ module.exports = async (req, res) => {
                 
                 // FIXED: Ban Whisper from hallucinating English and Prime it for Indian Languages
                 formData.append('temperature', '0.0'); 
-                formData.append('prompt', 'Namaste, kem cho. Tumhara naam kya hai? I want smile design.'); 
+                formData.append('prompt', 'Hello, namaste, kem cho. Tumhara naam kya hai? I want smile design.'); 
                 
                 const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
                     method: 'POST',
@@ -67,7 +66,7 @@ module.exports = async (req, res) => {
                     const whisperData = await whisperRes.json();
                     if (whisperData.text && whisperData.text.trim()) {
                         const tText = whisperData.text.trim();
-                        // WHISPER SILENCE BUG GUARD: If it hears nothing, it hallucinates these words
+                        // WHISPER SILENCE BUG GUARD
                         if (tText.toLowerCase() === 'foreign' || tText.toLowerCase() === 'foreign.' || tText.toLowerCase() === 'thank you' || tText.toLowerCase() === 'thank you.' || tText.toLowerCase() === 'subtitles by amara' || tText.toLowerCase() === 'the water to land gather' || tText.toLowerCase() === 'the water to land gather.') {
                             console.log("Whisper silence bug detected. Falling back to browser text.");
                         } else {
@@ -196,7 +195,7 @@ ${contextText}`;
                 speaker: "shreya", 
                 model: "bulbul:v3",
                 speech_sample_rate: 8000, 
-                pace: 1.0 // FIXED: Slowed down to 1.0 here as well
+                pace: 1.0 
             })
         });
 
