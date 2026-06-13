@@ -12,9 +12,13 @@ module.exports = async (req, res) => {
     }
 
     try {
-        const { userText, history, type, text, audioBase64, audioExt } = req.body;
-
-        if (type === 'tts') {
+        // ==========================================
+        // ROUTE 1: VAPI CUSTOM VOICE (SARVAM TTS)
+        // ==========================================
+        // Vapi sends the AI's generated text here to be converted to speech
+        if (req.body.message && req.body.message.type === 'voice-request') {
+            const textToSpeak = req.body.message.text;
+            
             const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
                 method: 'POST',
                 headers: {
@@ -22,86 +26,74 @@ module.exports = async (req, res) => {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    inputs: [text],
+                    inputs: [textToSpeak],
                     target_language_code: "hi-IN",
                     speaker: "shreya",
                     model: "bulbul:v3",
                     speech_sample_rate: 8000,
-                    pace: 1.0 // FIXED: Slowed down to 1.0 for a softer, calmer, less aggressive tone
+                    pace: 1.0 
                 })
             });
 
             if (!sarvamResponse.ok) {
-                const sarvamErr = await sarvamResponse.text();
-                throw new Error(`Sarvam Audio Engine Failed: ${sarvamErr}`);
+                console.error("Sarvam TTS Failed:", await sarvamResponse.text());
+                throw new Error("Sarvam TTS Failed");
             }
             
+            // Converts Sarvam's Base64 into a raw audio stream for Vapi WebRTC
             const sarvamData = await sarvamResponse.json();
-            return res.status(200).json({ audioBase64: sarvamData.audios[0] });
+            const audioBuffer = Buffer.from(sarvamData.audios[0], 'base64');
+            
+            res.setHeader('Content-Type', 'audio/wav');
+            return res.status(200).send(audioBuffer);
         }
 
-        let finalTextToProcess = userText; 
-        let whisperError = null;
-
-        if (audioBase64) {
-            try {
-                const safeExt = audioExt || 'webm'; 
-                const buffer = Buffer.from(audioBase64, 'base64');
-                const blob = new Blob([buffer], { type: `audio/${safeExt}` });
-                const formData = new FormData();
-                formData.append('file', blob, `audio.${safeExt}`);
-                
-                // FIXED: Upgraded from "turbo" to the ultra-accurate "whisper-large-v3" for perfect regional dialects
-                formData.append('model', 'whisper-large-v3'); 
-                
-                // FIXED: Removed the Prompt guardrails to allow the model to auto-detect Gujarati natively
-                const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}` },
-                    body: formData
-                });
-
-                if (whisperRes.ok) {
-                    const whisperData = await whisperRes.json();
-                    if (whisperData.text && whisperData.text.trim()) {
-                        const tText = whisperData.text.trim();
-                        // WHISPER SILENCE BUG GUARD
-                        if (tText.toLowerCase() === 'foreign' || tText.toLowerCase() === 'foreign.' || tText.toLowerCase() === 'thank you' || tText.toLowerCase() === 'thank you.' || tText.toLowerCase() === 'subtitles by amara' || tText.toLowerCase() === 'the water to land gather' || tText.toLowerCase() === 'the water to land gather.') {
-                            console.log("Whisper silence bug detected. Falling back to browser text.");
-                        } else {
-                            finalTextToProcess = tText;
-                        }
-                    }
-                } else {
-                    whisperError = await whisperRes.text();
-                    console.error("Whisper API Error:", whisperError);
+        // ==========================================
+        // ROUTE 2: VAPI CUSTOM LLM (PINECONE + GROQ)
+        // ==========================================
+        // Vapi streams the conversation here for you to inject knowledge
+        if (req.body.message && req.body.message.type === 'conversation-update' || req.body.messages) {
+            
+            // Vapi sends an array of messages representing the live chat history
+            const messages = req.body.messages || req.body.message.messages;
+            
+            // 1. Extract the user's latest spoken sentence to search Pinecone
+            let userText = "";
+            for (let i = messages.length - 1; i >= 0; i--) {
+                if (messages[i].role === 'user') {
+                    userText = messages[i].content;
+                    break;
                 }
-            } catch (e) { 
-                whisperError = e.message;
-                console.error("Whisper processing failed:", e); 
             }
-        }
 
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
-        const index = pc.index("usd-articles"); 
+            // 2. Query Pinecone Database
+            let contextText = "No relevant articles found.";
+            if (userText && userText.length > 2) {
+                try {
+                    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+                    const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
+                    const index = pc.index("usd-articles"); 
 
-        const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
-        const userVector = await embeddingModel.embedContent(finalTextToProcess);
-        const vector768 = userVector.embedding.values.slice(0, 768);
+                    const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
+                    const userVector = await embeddingModel.embedContent(userText);
+                    const vector768 = userVector.embedding.values.slice(0, 768);
 
-        const searchResults = await index.query({
-            vector: vector768,
-            topK: 2,
-            includeMetadata: true
-        });
+                    const searchResults = await index.query({
+                        vector: vector768,
+                        topK: 2,
+                        includeMetadata: true
+                    });
 
-        let contextText = "No relevant articles found.";
-        if (searchResults.matches && searchResults.matches.length > 0) {
-            contextText = searchResults.matches.map(match => match.metadata.content).join("\n\n");
-        }
+                    if (searchResults.matches && searchResults.matches.length > 0) {
+                        contextText = searchResults.matches.map(match => match.metadata.content).join("\n\n");
+                    }
+                } catch (e) {
+                    console.error("Pinecone Retrieval Error:", e.message);
+                }
+            }
 
-        const systemPrompt = `=========================================
+            // 3. Construct your exact strict Custom Prompt
+            const systemPrompt = `=========================================
 MASTER DIRECTIVE: ULTIMATE SMILE DESIGN (USD) VOICE AGENT
 =========================================
 IDENTITY: You are the official Voice AI Assistant of Ultimate Smile Design (USD). Always speak as "we", "our", and "us". NEVER identify yourself as ChatGPT, AI model, BIK, or any third-party platform. If asked who you are, say: "We are the support assistant of Ultimate Smile Design."
@@ -148,69 +140,53 @@ INTENT ROUTING & VOICE PLAYBOOK (HOW TO ANSWER):
 COMPANY FACTS FOR EXTRA KNOWLEDGE:
 ${contextText}`;
 
-        const groqMessages = [{ role: "system", content: systemPrompt }];
-        if (history && history.length > 0) {
-            history.forEach(h => {
-                const role = h.role === 'model' ? 'assistant' : 'user';
-                const content = h.parts[0].text;
-                if (content) groqMessages.push({ role, content });
+            // Inject the dynamic Pinecone prompt so Groq knows the answer
+            if (messages.length > 0 && messages[0].role === 'system') {
+                messages[0].content = systemPrompt;
+            } else {
+                messages.unshift({ role: 'system', content: systemPrompt });
+            }
+
+            // 4. Stream response instantly from Groq (Vapi requires SSE Streaming to be fast!)
+            const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    model: "llama-3.3-70b-versatile", 
+                    messages: messages,
+                    stream: true, 
+                    max_tokens: 150
+                })
             });
+
+            if (!groqResponse.ok) throw new Error("Groq API Error");
+
+            // Pipe the Groq SSE stream directly back to Vapi WebRTC
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+
+            const body = groqResponse.body;
+            if (body.pipe) {
+                body.pipe(res);
+            } else {
+                const reader = body.getReader();
+                const decoder = new TextDecoder("utf-8");
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    res.write(decoder.decode(value, { stream: true }));
+                }
+                return res.end();
+            }
+            return;
         }
-        if (finalTextToProcess) groqMessages.push({ role: "user", content: finalTextToProcess });
 
-        const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                model: "llama-3.3-70b-versatile", 
-                messages: groqMessages,
-                max_tokens: 150
-            })
-        });
-
-        if (!groqResponse.ok) {
-            const errText = await groqResponse.text();
-            console.error("Groq Raw Error:", errText);
-            throw new Error(`Groq API Error: ${errText}`);
-        }
-
-        const groqData = await groqResponse.json();
-        const botReplyText = groqData.choices[0].message.content;
-
-        const cleanSpokenText = botReplyText.replace('[END_CHAT]', '').trim();
-
-        const sarvamResponse = await fetch('https://api.sarvam.ai/text-to-speech', {
-            method: 'POST',
-            headers: {
-                'api-subscription-key': process.env.SARVAM_API_KEY,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                inputs: [cleanSpokenText],
-                target_language_code: "hi-IN",
-                speaker: "shreya", 
-                model: "bulbul:v3",
-                speech_sample_rate: 8000, 
-                pace: 1.0 
-            })
-        });
-
-        if (!sarvamResponse.ok) {
-            const sarvamErr = await sarvamResponse.text();
-            throw new Error(`Sarvam Audio Engine Failed: ${sarvamErr}`);
-        }
-        
-        const sarvamData = await sarvamResponse.json();
-
-        res.status(200).json({ 
-            replyText: botReplyText, 
-            audioBase64: sarvamData.audios[0],
-            transcribedText: finalTextToProcess, // Shows exactly what Whisper heard!
-            whisperError: whisperError // Exposes any formatting errors directly to UI
-        });
+        // Fallback for unauthorized pings
+        res.status(400).json({ error: "Invalid request payload" });
 
     } catch (error) {
         console.error("Backend Error:", error);
